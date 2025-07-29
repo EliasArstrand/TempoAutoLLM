@@ -1,21 +1,27 @@
+# Use Python base image
 FROM python:3.10-slim
 
-# Install basic tools
-RUN apt-get update && apt-get install -y \
-    git build-essential cmake wget curl
+# Install dependencies for llama.cpp and Python
+RUN apt-get update && \
+    apt-get install -y wget unzip && \
+    apt-get clean
 
-# Install llama.cpp
-WORKDIR /usr/local/src
-RUN git clone https://github.com/ggerganov/llama.cpp && cd llama.cpp && make
-RUN cp llama.cpp/main /usr/local/bin/llama
+# Install llama.cpp binary (precompiled)
+RUN wget https://huggingface.co/ggerganov/llama.cpp/resolve/main/bin/llama-linux && \
+    chmod +x llama-linux && \
+    mv llama-linux /usr/local/bin/llama
 
-# Create app directory
+# Set work directory
 WORKDIR /app
-COPY ./app /app/app
-COPY requirements.txt .
 
-# Install Python deps
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy all app files
+COPY . .
 
+# Install Python packages
+RUN pip install --no-cache-dir -r Requirements.txt
+
+# Expose port for FastAPI
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Run the app using uvicorn
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
