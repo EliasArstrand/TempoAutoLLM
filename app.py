@@ -1,32 +1,32 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
 import subprocess
 import os
 import urllib.request
 
-# Define constants
-MODEL_PATH = "app/model/mistral-7b.gguf"
+# Model download settings
+MODEL_PATH = "model/mistral-7b.gguf"
 MODEL_URL = "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
-MODEL_DIR = os.path.dirname(MODEL_PATH)
 
-# Make sure model is downloaded
+# Download the model if it doesn't exist
+os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 if not os.path.exists(MODEL_PATH):
-    print("Downloading model...")
-    os.makedirs(MODEL_DIR, exist_ok=True)
+    print("📥 Downloading Mistral model...")
     urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-    print("Model downloaded successfully.")
+    print("✅ Model downloaded.")
 
-# Define FastAPI app
+# Init FastAPI
 app = FastAPI()
 
-# Define request schema
+# Request schema
 class PromptRequest(BaseModel):
     prompt: str
 
+# POST endpoint
 @app.post("/predict")
 async def predict(request: PromptRequest):
     try:
-        # Build llama.cpp command
+        # Run the LLM using llama.cpp
         result = subprocess.run(
             ["llama", "-m", MODEL_PATH, "-p", request.prompt],
             stdout=subprocess.PIPE,
@@ -34,7 +34,6 @@ async def predict(request: PromptRequest):
             text=True
         )
 
-        # Error handling
         if result.returncode != 0:
             return {
                 "error": result.stderr.strip(),

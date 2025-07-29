@@ -11,17 +11,17 @@ RUN wget https://huggingface.co/ggerganov/llama.cpp/resolve/main/bin/llama-linux
     chmod +x llama-linux && \
     mv llama-linux /usr/local/bin/llama
 
-# Set work directory
+# Set working directory
 WORKDIR /app
 
-# Copy all app files
+# Copy project files into the container
 COPY . .
 
-# Install Python packages
-RUN pip install --no-cache-dir -r Requirements.txt
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port for FastAPI
+# Expose FastAPI port
 EXPOSE 8000
 
-# Run the app using uvicorn
+# Run the API
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
