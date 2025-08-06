@@ -1,0 +1,11 @@
+# RunPod serverless SDK
+runpod
+
+# PDF processing
+PyMuPDF
+
+# Additional PDF fallback options
+pdfplumber
+
+# Basic utilities (usually included but being explicit)
+requests
