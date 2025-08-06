@@ -11,11 +11,11 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install llama.cpp - Build from source for reliability
-RUN apt-get update && apt-get install -y git cmake && \
+RUN apt-get update && apt-get install -y git cmake libcurl4-openssl-dev && \
     git clone https://github.com/ggerganov/llama.cpp.git && \
     cd llama.cpp && \
     mkdir build && cd build && \
-    cmake .. -DLLAMA_BUILD_TESTS=OFF && \
+    cmake .. -DLLAMA_BUILD_TESTS=OFF -DLLAMA_CURL=OFF && \
     cmake --build . --config Release -j$(nproc) && \
     cp bin/llama-cli /usr/local/bin/llama && \
     cd ../.. && rm -rf llama.cpp && \
