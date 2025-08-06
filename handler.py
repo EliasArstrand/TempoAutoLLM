@@ -181,34 +181,51 @@ def handler(event):
         try:
             pdf_data = input_data["pdf_base64"]
             
+            print(f"🔍 DEBUG: pdf_data type: {type(pdf_data)}")
+            print(f"🔍 DEBUG: pdf_data preview: {str(pdf_data)[:100]}")
+            
             # Handle different n8n binary formats
             if isinstance(pdf_data, dict):
+                print(f"🔍 DEBUG: pdf_data is dict with keys: {list(pdf_data.keys())}")
                 # n8n sometimes sends as object with data property
                 if 'data' in pdf_data:
                     pdf_data = pdf_data['data']
+                elif 'buffer' in pdf_data:
+                    pdf_data = pdf_data['buffer'] 
+                elif 'content' in pdf_data:
+                    pdf_data = pdf_data['content']
                 else:
                     return {
                         "success": False,
-                        "error": f"Unexpected binary format: {list(pdf_data.keys())}"
+                        "error": f"Unexpected binary format with keys: {list(pdf_data.keys())}",
+                        "debug_full_data": str(pdf_data)[:500]
                     }
             
             # Ensure we have a string for base64 decoding
             if not isinstance(pdf_data, str):
                 return {
                     "success": False,
-                    "error": f"PDF data is not string format: {type(pdf_data)}"
+                    "error": f"PDF data is not string format: {type(pdf_data)}",
+                    "debug_data_content": str(pdf_data)[:200]
                 }
+            
+            print(f"🔍 DEBUG: Final pdf_data length: {len(pdf_data)}")
             
             # Remove data URL prefix if present (data:application/pdf;base64,)
             if pdf_data.startswith('data:'):
                 pdf_data = pdf_data.split(',', 1)[1]
+                print(f"🔍 DEBUG: Removed data URL prefix, new length: {len(pdf_data)}")
             
             pdf_bytes = base64.b64decode(pdf_data)
+            
+            print(f"🔍 DEBUG: Decoded PDF bytes length: {len(pdf_bytes)}")
             
             if len(pdf_bytes) < 100:
                 return {
                     "success": False,
-                    "error": f"PDF data too small ({len(pdf_bytes)} bytes) - likely corrupted"
+                    "error": f"PDF data too small ({len(pdf_bytes)} bytes) - likely corrupted",
+                    "debug_original_data_length": len(str(pdf_data)),
+                    "debug_data_sample": str(pdf_data)[:100]
                 }
                 
         except Exception as e:
