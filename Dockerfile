@@ -10,21 +10,16 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install llama.cpp binary (CPU version for efficiency)
-RUN wget -O llama-cpp.tar.gz "https://github.com/ggerganov/llama.cpp/releases/download/b3559/llama-b3559-bin-ubuntu-x64.zip" && \
-    apt-get update && apt-get install -y unzip && \
-    unzip llama-b3559-bin-ubuntu-x64.zip && \
-    mv llama-b3559-bin-ubuntu-x64/llama-cli /usr/local/bin/llama && \
-    chmod +x /usr/local/bin/llama && \
-    rm -rf llama-cpp.tar.gz llama-b3559-bin-ubuntu-x64* && \
+# Install llama.cpp - Build from source for reliability
+RUN apt-get update && apt-get install -y git cmake && \
+    git clone https://github.com/ggerganov/llama.cpp.git && \
+    cd llama.cpp && \
+    mkdir build && cd build && \
+    cmake .. -DLLAMA_BUILD_TESTS=OFF && \
+    cmake --build . --config Release -j$(nproc) && \
+    cp bin/llama-cli /usr/local/bin/llama && \
+    cd ../.. && rm -rf llama.cpp && \
     apt-get clean
-
-# Alternative: Build from source if binary doesn't work
-# RUN git clone https://github.com/ggerganov/llama.cpp.git && \
-#     cd llama.cpp && \
-#     make -j$(nproc) && \
-#     cp llama-cli /usr/local/bin/llama && \
-#     cd .. && rm -rf llama.cpp
 
 # Set working directory
 WORKDIR /app
