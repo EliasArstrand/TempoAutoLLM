@@ -177,13 +177,46 @@ def handler(event):
                 "error": "Missing 'pdf_base64' in input data"
             }
         
-        # Decode PDF
+        # Decode PDF - handle different n8n formats
         try:
-            pdf_bytes = base64.b64decode(input_data["pdf_base64"])
+            pdf_data = input_data["pdf_base64"]
+            
+            # Handle different n8n binary formats
+            if isinstance(pdf_data, dict):
+                # n8n sometimes sends as object with data property
+                if 'data' in pdf_data:
+                    pdf_data = pdf_data['data']
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Unexpected binary format: {list(pdf_data.keys())}"
+                    }
+            
+            # Ensure we have a string for base64 decoding
+            if not isinstance(pdf_data, str):
+                return {
+                    "success": False,
+                    "error": f"PDF data is not string format: {type(pdf_data)}"
+                }
+            
+            # Remove data URL prefix if present (data:application/pdf;base64,)
+            if pdf_data.startswith('data:'):
+                pdf_data = pdf_data.split(',', 1)[1]
+            
+            pdf_bytes = base64.b64decode(pdf_data)
+            
+            if len(pdf_bytes) < 100:
+                return {
+                    "success": False,
+                    "error": f"PDF data too small ({len(pdf_bytes)} bytes) - likely corrupted"
+                }
+                
         except Exception as e:
             return {
                 "success": False,
-                "error": f"Invalid base64 PDF data: {str(e)}"
+                "error": f"Invalid base64 PDF data: {str(e)}",
+                "debug_data_type": str(type(input_data.get("pdf_base64"))),
+                "debug_data_preview": str(input_data.get("pdf_base64"))[:200] if input_data.get("pdf_base64") else "None"
             }
         
         # Extract text from PDF
