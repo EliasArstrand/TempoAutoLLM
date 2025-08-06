@@ -184,38 +184,54 @@ def handler(event):
             print(f"🔍 DEBUG: pdf_data type: {type(pdf_data)}")
             print(f"🔍 DEBUG: pdf_data preview: {str(pdf_data)[:100]}")
             
-            # Handle different n8n binary formats
+            # Handle n8n binary object format
             if isinstance(pdf_data, dict):
                 print(f"🔍 DEBUG: pdf_data is dict with keys: {list(pdf_data.keys())}")
-                # n8n sometimes sends as object with data property
-                if 'data' in pdf_data:
-                    pdf_data = pdf_data['data']
-                elif 'buffer' in pdf_data:
-                    pdf_data = pdf_data['buffer'] 
-                elif 'content' in pdf_data:
-                    pdf_data = pdf_data['content']
+                
+                # Try different possible keys for the actual binary data
+                possible_keys = ['data', 'buffer', 'content', 'base64', 'body']
+                for key in possible_keys:
+                    if key in pdf_data:
+                        pdf_data = pdf_data[key]
+                        print(f"🔍 DEBUG: Found data in key: {key}")
+                        break
                 else:
-                    return {
-                        "success": False,
-                        "error": f"Unexpected binary format with keys: {list(pdf_data.keys())}",
-                        "debug_full_data": str(pdf_data)[:500]
-                    }
+                    # If it's a Buffer-like object, try to extract the data array
+                    if 'type' in pdf_data and pdf_data.get('type') == 'Buffer':
+                        if 'data' in pdf_data and isinstance(pdf_data['data'], list):
+                            # Convert Buffer data array to bytes then to base64
+                            buffer_bytes = bytes(pdf_data['data'])
+                            pdf_data = base64.b64encode(buffer_bytes).decode('utf-8')
+                            print(f"🔍 DEBUG: Converted Buffer to base64, length: {len(pdf_data)}")
+                        else:
+                            return {
+                                "success": False,
+                                "error": f"Buffer object missing data array: {pdf_data}",
+                                "debug_buffer_keys": list(pdf_data.keys())
+                            }
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"Could not find binary data in object with keys: {list(pdf_data.keys())}",
+                            "debug_full_object": str(pdf_data)[:500]
+                        }
             
             # Ensure we have a string for base64 decoding
             if not isinstance(pdf_data, str):
                 return {
                     "success": False,
-                    "error": f"PDF data is not string format: {type(pdf_data)}",
+                    "error": f"PDF data is still not string format after processing: {type(pdf_data)}",
                     "debug_data_content": str(pdf_data)[:200]
                 }
             
             print(f"🔍 DEBUG: Final pdf_data length: {len(pdf_data)}")
             
-            # Remove data URL prefix if present (data:application/pdf;base64,)
+            # Remove data URL prefix if present
             if pdf_data.startswith('data:'):
                 pdf_data = pdf_data.split(',', 1)[1]
                 print(f"🔍 DEBUG: Removed data URL prefix, new length: {len(pdf_data)}")
             
+            # Decode base64
             pdf_bytes = base64.b64decode(pdf_data)
             
             print(f"🔍 DEBUG: Decoded PDF bytes length: {len(pdf_bytes)}")
