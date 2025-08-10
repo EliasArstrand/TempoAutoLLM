@@ -27,20 +27,26 @@ def download_model():
             raise e
 
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
-    """Extract text from PDF using multiple methods for best results"""
+    """Extract text from PDF using PyMuPDF"""
     try:
-        # Method 1: PyMuPDF - usually best for tables
         pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
         text_parts = []
         
         for page_num in range(pdf_document.page_count):
-            page = pdf_document.get_page(page_num)
-            # Try different extraction methods
-            text = page.get_text()
-            if not text.strip():
-                # If regular extraction fails, try textpage
-                text = page.get_textpage().extractText()
-            text_parts.append(text)
+            try:
+                # Use the correct method for newer PyMuPDF versions
+                page = pdf_document[page_num]  # Fixed: was get_page(page_num)
+                
+                # Extract text
+                text = page.get_text()
+                if not text.strip():
+                    # If regular extraction fails, try with different option
+                    text = page.get_text("text")
+                text_parts.append(text)
+                
+            except Exception as page_error:
+                print(f"Error processing page {page_num}: {page_error}")
+                continue
         
         pdf_document.close()
         full_text = "\n".join(text_parts)
