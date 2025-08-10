@@ -10,7 +10,7 @@ from typing import Dict, List, Any
 import fitz  # PyMuPDF
 import re
 
-# Model settings - Using smaller Phi-3-mini for efficiency
+# Model settings - Not needed for regex approach but keeping for reference
 MODEL_PATH = "model/phi-3-mini.gguf"
 MODEL_URL = "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf"
 
@@ -28,7 +28,7 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
         for page_num in range(pdf_document.page_count):
             try:
                 # Use the correct method for newer PyMuPDF versions
-                page = pdf_document[page_num]  # Fixed: was get_page(page_num)
+                page = pdf_document[page_num]
                 
                 # Extract text
                 text = page.get_text()
@@ -53,7 +53,7 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
         raise Exception(f"PDF text extraction failed: {str(e)}")
 
 def create_extraction_prompt(pdf_text: str) -> str:
-    """Create a prompt for the LLM to extract product data"""
+    """Create a prompt for the extraction process"""
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     
     prompt = f"""You are a data extraction expert. Extract product sales data from this Swedish retail report.
@@ -76,26 +76,13 @@ RULES:
 - Skip header lines and totals
 - Return ONLY valid JSON, no other text
 
-REQUIRED JSON FORMAT:
-{{
-  "date": "{yesterday}",
-  "extracted_at": "{datetime.now().isoformat()}",
-  "products": [
-    {{
-      "artikelnummer": "101718356",
-      "namn": "GAR ÄGG 6P INNE M/L",
-      "antal_sald": 7
-    }}
-  ]
-}}
-
 PDF TEXT TO ANALYZE:
-{pdf_text[:4000]}"""  # Limit text to avoid context issues
+{pdf_text[:4000]}"""
 
     return prompt
 
 def run_llm_extraction(prompt: str) -> str:
-    """Run extraction using regex patterns (with debugging)"""
+    """Run extraction using regex patterns with debugging"""
     try:
         # Extract the PDF text from the prompt
         lines = prompt.split('\n')
@@ -109,7 +96,6 @@ def run_llm_extraction(prompt: str) -> str:
             if pdf_text_start:
                 pdf_text_lines.append(line)
         
-        pdf_text = '\n'.join(pdf_text_lines)
         products = []
         
         print(f"🔍 Processing {len(pdf_text_lines)} lines of PDF text")
@@ -134,405 +120,49 @@ def run_llm_extraction(prompt: str) -> str:
         
         print(f"📊 Found {len(digit_lines)} lines starting with 9 digits")
         
-        # Try multiple patterns on the digit lines
+        # Try to extract from the digit lines
         for line_num, line in digit_lines:
-            # Pattern 1: Simple extraction
-            parts = line.split()
-            if len(parts) >= 3:
-                artikelnummer = parts[0]
-                
-                # Find where numbers start after product name
-                namn_parts = []
-                antal_sald = 0
-                
-                for i, part in enumerate(parts[1:], 1):
-                    # If this part is a pure number (not containing letters), it might be quantity
-                    if re.match(r'^\d+
-
-def parse_llm_output(llm_output: str) -> Dict[str, Any]:
-    """Parse and validate LLM JSON output"""
-    try:
-        # Find JSON in the output (LLM might add extra text)
-        json_start = llm_output.find('{')
-        json_end = llm_output.rfind('}') + 1
-        
-        if json_start == -1 or json_end == 0:
-            raise ValueError("No JSON found in LLM output")
-        
-        json_str = llm_output[json_start:json_end]
-        data = json.loads(json_str)
-        
-        # Validate required fields
-        if "products" not in data:
-            raise ValueError("Missing 'products' field in output")
-        
-        # Validate each product
-        validated_products = []
-        for product in data["products"]:
-            if all(key in product for key in ["artikelnummer", "namn", "antal_sald"]):
-                # Ensure artikelnummer is 9 digits
-                if len(str(product["artikelnummer"])) == 9 and str(product["artikelnummer"]).isdigit():
-                    validated_products.append(product)
-        
-        data["products"] = validated_products
-        data["stats"] = {
-            "total_products_found": len(validated_products),
-            "extraction_confidence": "high" if len(validated_products) > 50 else "medium"
-        }
-        
-        return data
-        
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON from LLM: {str(e)}")
-    except Exception as e:
-        raise ValueError(f"Output parsing error: {str(e)}")
-
-def handler(event):
-    """Main RunPod handler function"""
-    try:
-        # Download model on first run
-        download_model()
-        
-        # Get input data
-        input_data = event.get("input", {})
-        
-        if "pdf_base64" not in input_data:
-            return {
-                "success": False,
-                "error": "Missing 'pdf_base64' in input data"
-            }
-        
-        # Decode PDF - handle different n8n formats
-        try:
-            pdf_data = input_data["pdf_base64"]
+            try:
+                # Split the line into parts
+                parts = line.split()
+                if len(parts) >= 3:
+                    artikelnummer = parts[0]
+                    
+                    # Find where numbers start after product name
+                    namn_parts = []
+                    antal_sald = 0
+                    
+                    for i, part in enumerate(parts[1:], 1):
+                        # If this part is a pure number and we have some name parts, might be quantity
+                        if re.match(r'^\d+$', part) and len(namn_parts) > 0:
+                            antal_sald = int(part)
+                            break
+                        # If it contains letters, it's likely part of the name
+                        elif re.search(r'[A-ZÅÄÖÜ]', part):
+                            namn_parts.append(part)
+                        # If it's a category separator (all caps with /)
+                        elif '/' in part and part.isupper():
+                            # This might be category, try to find quantity after
+                            remaining_parts = parts[i+1:]
+                            for remaining_part in remaining_parts:
+                                if re.match(r'^\d+$', remaining_part):
+                                    antal_sald = int(remaining_part)
+                                    break
+                            break
+                    
+                    namn = ' '.join(namn_parts).strip()
+                    
+                    if namn and len(namn) > 2 and artikelnummer:
+                        products.append({
+                            "artikelnummer": artikelnummer,
+                            "namn": namn,
+                            "antal_sald": antal_sald
+                        })
+                        print(f"📦 EXTRACTED: {artikelnummer} | {namn} | {antal_sald}")
             
-            print(f"🔍 DEBUG: pdf_data type: {type(pdf_data)}")
-            print(f"🔍 DEBUG: pdf_data preview: {str(pdf_data)[:100]}")
-            
-            # Handle n8n binary object format
-            if isinstance(pdf_data, dict):
-                print(f"🔍 DEBUG: pdf_data is dict with keys: {list(pdf_data.keys())}")
-                
-                # Try different possible keys for the actual binary data
-                possible_keys = ['data', 'buffer', 'content', 'base64', 'body']
-                for key in possible_keys:
-                    if key in pdf_data:
-                        pdf_data = pdf_data[key]
-                        print(f"🔍 DEBUG: Found data in key: {key}")
-                        break
-                else:
-                    # If it's a Buffer-like object, try to extract the data array
-                    if 'type' in pdf_data and pdf_data.get('type') == 'Buffer':
-                        if 'data' in pdf_data and isinstance(pdf_data['data'], list):
-                            # Convert Buffer data array to bytes then to base64
-                            buffer_bytes = bytes(pdf_data['data'])
-                            pdf_data = base64.b64encode(buffer_bytes).decode('utf-8')
-                            print(f"🔍 DEBUG: Converted Buffer to base64, length: {len(pdf_data)}")
-                        else:
-                            return {
-                                "success": False,
-                                "error": f"Buffer object missing data array: {pdf_data}",
-                                "debug_buffer_keys": list(pdf_data.keys())
-                            }
-                    else:
-                        return {
-                            "success": False,
-                            "error": f"Could not find binary data in object with keys: {list(pdf_data.keys())}",
-                            "debug_full_object": str(pdf_data)[:500]
-                        }
-            
-            # Ensure we have a string for base64 decoding
-            if not isinstance(pdf_data, str):
-                return {
-                    "success": False,
-                    "error": f"PDF data is still not string format after processing: {type(pdf_data)}",
-                    "debug_data_content": str(pdf_data)[:200]
-                }
-            
-            print(f"🔍 DEBUG: Final pdf_data length: {len(pdf_data)}")
-            
-            # Remove data URL prefix if present
-            if pdf_data.startswith('data:'):
-                pdf_data = pdf_data.split(',', 1)[1]
-                print(f"🔍 DEBUG: Removed data URL prefix, new length: {len(pdf_data)}")
-            
-            # Decode base64
-            pdf_bytes = base64.b64decode(pdf_data)
-            
-            print(f"🔍 DEBUG: Decoded PDF bytes length: {len(pdf_bytes)}")
-            
-            if len(pdf_bytes) < 100:
-                return {
-                    "success": False,
-                    "error": f"PDF data too small ({len(pdf_bytes)} bytes) - likely corrupted",
-                    "debug_original_data_length": len(str(pdf_data)),
-                    "debug_data_sample": str(pdf_data)[:100]
-                }
-                
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"Invalid base64 PDF data: {str(e)}",
-                "debug_data_type": str(type(input_data.get("pdf_base64"))),
-                "debug_data_preview": str(input_data.get("pdf_base64"))[:200] if input_data.get("pdf_base64") else "None"
-            }
-        
-        # Extract text from PDF
-        try:
-            pdf_text = extract_text_from_pdf(pdf_bytes)
-            print(f"📄 Extracted {len(pdf_text)} characters from PDF")
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-        
-        # Create extraction prompt
-        prompt = create_extraction_prompt(pdf_text)
-        
-        # Run LLM extraction
-        try:
-            llm_output = run_llm_extraction(prompt)
-            print(f"🤖 LLM generated {len(llm_output)} characters")
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "debug_info": {
-                    "pdf_text_length": len(pdf_text),
-                    "pdf_preview": pdf_text[:500]
-                }
-            }
-        
-        # Parse and validate output
-        try:
-            result_data = parse_llm_output(llm_output)
-            result_data["success"] = True
-            result_data["errors"] = []
-            
-            print(f"✅ Successfully extracted {len(result_data['products'])} products")
-            return result_data
-            
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "debug_info": {
-                    "llm_output_preview": llm_output[:1000]
-                }
-            }
-    
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Unexpected error: {str(e)}"
-        }
-
-# Start the serverless worker
-if __name__ == "__main__":
-    runpod.serverless.start({"handler": handler}), part) and i > 1:
-                        # Try to get quantity from surrounding numbers
-                        remaining_parts = parts[i:]
-                        for remaining_part in remaining_parts:
-                            if re.match(r'^\d+
-
-def parse_llm_output(llm_output: str) -> Dict[str, Any]:
-    """Parse and validate LLM JSON output"""
-    try:
-        # Find JSON in the output (LLM might add extra text)
-        json_start = llm_output.find('{')
-        json_end = llm_output.rfind('}') + 1
-        
-        if json_start == -1 or json_end == 0:
-            raise ValueError("No JSON found in LLM output")
-        
-        json_str = llm_output[json_start:json_end]
-        data = json.loads(json_str)
-        
-        # Validate required fields
-        if "products" not in data:
-            raise ValueError("Missing 'products' field in output")
-        
-        # Validate each product
-        validated_products = []
-        for product in data["products"]:
-            if all(key in product for key in ["artikelnummer", "namn", "antal_sald"]):
-                # Ensure artikelnummer is 9 digits
-                if len(str(product["artikelnummer"])) == 9 and str(product["artikelnummer"]).isdigit():
-                    validated_products.append(product)
-        
-        data["products"] = validated_products
-        data["stats"] = {
-            "total_products_found": len(validated_products),
-            "extraction_confidence": "high" if len(validated_products) > 50 else "medium"
-        }
-        
-        return data
-        
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON from LLM: {str(e)}")
-    except Exception as e:
-        raise ValueError(f"Output parsing error: {str(e)}")
-
-def handler(event):
-    """Main RunPod handler function"""
-    try:
-        # Download model on first run
-        download_model()
-        
-        # Get input data
-        input_data = event.get("input", {})
-        
-        if "pdf_base64" not in input_data:
-            return {
-                "success": False,
-                "error": "Missing 'pdf_base64' in input data"
-            }
-        
-        # Decode PDF - handle different n8n formats
-        try:
-            pdf_data = input_data["pdf_base64"]
-            
-            print(f"🔍 DEBUG: pdf_data type: {type(pdf_data)}")
-            print(f"🔍 DEBUG: pdf_data preview: {str(pdf_data)[:100]}")
-            
-            # Handle n8n binary object format
-            if isinstance(pdf_data, dict):
-                print(f"🔍 DEBUG: pdf_data is dict with keys: {list(pdf_data.keys())}")
-                
-                # Try different possible keys for the actual binary data
-                possible_keys = ['data', 'buffer', 'content', 'base64', 'body']
-                for key in possible_keys:
-                    if key in pdf_data:
-                        pdf_data = pdf_data[key]
-                        print(f"🔍 DEBUG: Found data in key: {key}")
-                        break
-                else:
-                    # If it's a Buffer-like object, try to extract the data array
-                    if 'type' in pdf_data and pdf_data.get('type') == 'Buffer':
-                        if 'data' in pdf_data and isinstance(pdf_data['data'], list):
-                            # Convert Buffer data array to bytes then to base64
-                            buffer_bytes = bytes(pdf_data['data'])
-                            pdf_data = base64.b64encode(buffer_bytes).decode('utf-8')
-                            print(f"🔍 DEBUG: Converted Buffer to base64, length: {len(pdf_data)}")
-                        else:
-                            return {
-                                "success": False,
-                                "error": f"Buffer object missing data array: {pdf_data}",
-                                "debug_buffer_keys": list(pdf_data.keys())
-                            }
-                    else:
-                        return {
-                            "success": False,
-                            "error": f"Could not find binary data in object with keys: {list(pdf_data.keys())}",
-                            "debug_full_object": str(pdf_data)[:500]
-                        }
-            
-            # Ensure we have a string for base64 decoding
-            if not isinstance(pdf_data, str):
-                return {
-                    "success": False,
-                    "error": f"PDF data is still not string format after processing: {type(pdf_data)}",
-                    "debug_data_content": str(pdf_data)[:200]
-                }
-            
-            print(f"🔍 DEBUG: Final pdf_data length: {len(pdf_data)}")
-            
-            # Remove data URL prefix if present
-            if pdf_data.startswith('data:'):
-                pdf_data = pdf_data.split(',', 1)[1]
-                print(f"🔍 DEBUG: Removed data URL prefix, new length: {len(pdf_data)}")
-            
-            # Decode base64
-            pdf_bytes = base64.b64decode(pdf_data)
-            
-            print(f"🔍 DEBUG: Decoded PDF bytes length: {len(pdf_bytes)}")
-            
-            if len(pdf_bytes) < 100:
-                return {
-                    "success": False,
-                    "error": f"PDF data too small ({len(pdf_bytes)} bytes) - likely corrupted",
-                    "debug_original_data_length": len(str(pdf_data)),
-                    "debug_data_sample": str(pdf_data)[:100]
-                }
-                
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"Invalid base64 PDF data: {str(e)}",
-                "debug_data_type": str(type(input_data.get("pdf_base64"))),
-                "debug_data_preview": str(input_data.get("pdf_base64"))[:200] if input_data.get("pdf_base64") else "None"
-            }
-        
-        # Extract text from PDF
-        try:
-            pdf_text = extract_text_from_pdf(pdf_bytes)
-            print(f"📄 Extracted {len(pdf_text)} characters from PDF")
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-        
-        # Create extraction prompt
-        prompt = create_extraction_prompt(pdf_text)
-        
-        # Run LLM extraction
-        try:
-            llm_output = run_llm_extraction(prompt)
-            print(f"🤖 LLM generated {len(llm_output)} characters")
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "debug_info": {
-                    "pdf_text_length": len(pdf_text),
-                    "pdf_preview": pdf_text[:500]
-                }
-            }
-        
-        # Parse and validate output
-        try:
-            result_data = parse_llm_output(llm_output)
-            result_data["success"] = True
-            result_data["errors"] = []
-            
-            print(f"✅ Successfully extracted {len(result_data['products'])} products")
-            return result_data
-            
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "debug_info": {
-                    "llm_output_preview": llm_output[:1000]
-                }
-            }
-    
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Unexpected error: {str(e)}"
-        }
-
-# Start the serverless worker
-if __name__ == "__main__":
-    runpod.serverless.start({"handler": handler}), remaining_part):
-                                antal_sald = int(remaining_part)
-                                break
-                        break
-                    else:
-                        namn_parts.append(part)
-                
-                namn = ' '.join(namn_parts).strip()
-                
-                if namn and len(namn) > 2:
-                    products.append({
-                        "artikelnummer": artikelnummer,
-                        "namn": namn,
-                        "antal_sald": antal_sald
-                    })
-                    print(f"📦 EXTRACTED: {artikelnummer} | {namn} | {antal_sald}")
+            except Exception as line_error:
+                print(f"❌ Error processing line {line_num}: {line_error}")
+                continue
         
         print(f"✅ Final extraction: {len(products)} products")
         
@@ -549,17 +179,10 @@ if __name__ == "__main__":
         raise Exception(f"Extraction error: {str(e)}")
 
 def parse_llm_output(llm_output: str) -> Dict[str, Any]:
-    """Parse and validate LLM JSON output"""
+    """Parse and validate output"""
     try:
-        # Find JSON in the output (LLM might add extra text)
-        json_start = llm_output.find('{')
-        json_end = llm_output.rfind('}') + 1
-        
-        if json_start == -1 or json_end == 0:
-            raise ValueError("No JSON found in LLM output")
-        
-        json_str = llm_output[json_start:json_end]
-        data = json.loads(json_str)
+        # The output should already be JSON from our regex extraction
+        data = json.loads(llm_output)
         
         # Validate required fields
         if "products" not in data:
@@ -582,14 +205,14 @@ def parse_llm_output(llm_output: str) -> Dict[str, Any]:
         return data
         
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON from LLM: {str(e)}")
+        raise ValueError(f"Invalid JSON from extraction: {str(e)}")
     except Exception as e:
         raise ValueError(f"Output parsing error: {str(e)}")
 
 def handler(event):
     """Main RunPod handler function"""
     try:
-        # Download model on first run
+        # Skip model download for regex approach
         download_model()
         
         # Get input data
@@ -601,7 +224,7 @@ def handler(event):
                 "error": "Missing 'pdf_base64' in input data"
             }
         
-        # Decode PDF - handle different n8n formats
+        # Decode PDF data
         try:
             pdf_data = input_data["pdf_base64"]
             
@@ -689,10 +312,10 @@ def handler(event):
         # Create extraction prompt
         prompt = create_extraction_prompt(pdf_text)
         
-        # Run LLM extraction
+        # Run extraction
         try:
-            llm_output = run_llm_extraction(prompt)
-            print(f"🤖 LLM generated {len(llm_output)} characters")
+            extraction_output = run_llm_extraction(prompt)
+            print(f"🤖 Extraction generated {len(extraction_output)} characters")
         except Exception as e:
             return {
                 "success": False,
@@ -705,7 +328,7 @@ def handler(event):
         
         # Parse and validate output
         try:
-            result_data = parse_llm_output(llm_output)
+            result_data = parse_llm_output(extraction_output)
             result_data["success"] = True
             result_data["errors"] = []
             
@@ -717,7 +340,7 @@ def handler(event):
                 "success": False,
                 "error": str(e),
                 "debug_info": {
-                    "llm_output_preview": llm_output[:1000]
+                    "extraction_output_preview": extraction_output[:1000]
                 }
             }
     
