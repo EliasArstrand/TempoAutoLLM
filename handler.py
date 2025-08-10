@@ -15,16 +15,9 @@ MODEL_PATH = "model/phi-3-mini.gguf"
 MODEL_URL = "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf"
 
 def download_model():
-    """Download the model if it doesn't exist"""
-    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-    if not os.path.exists(MODEL_PATH):
-        print("📥 Downloading Phi-3-mini model...")
-        try:
-            urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-            print("✅ Model downloaded successfully.")
-        except Exception as e:
-            print(f"❌ Model download failed: {e}")
-            raise e
+    """Download model function - disabled for regex-based extraction"""
+    print("📝 Using regex-based extraction, skipping model download")
+    pass
 
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     """Extract text from PDF using PyMuPDF"""
@@ -102,33 +95,80 @@ PDF TEXT TO ANALYZE:
     return prompt
 
 def run_llm_extraction(prompt: str) -> str:
-    """Run the LLM to extract data"""
+    """Run extraction using regex patterns (fallback while fixing llama.cpp)"""
     try:
-        # Run llama.cpp with Phi-3-mini
-        result = subprocess.run([
-            "/usr/local/bin/llama",
-            "-m", MODEL_PATH,
-            "-p", prompt,
-            "-n", "2048",  # Max output tokens
-            "-t", "4",     # Threads
-            "--temp", "0.1",  # Low temperature for consistent extraction
-            "--top-p", "0.9"
-        ], 
-        stdout=subprocess.PIPE, 
-        stderr=subprocess.PIPE, 
-        text=True,
-        timeout=120  # 2 minute timeout
-        )
-
-        if result.returncode != 0:
-            raise Exception(f"LLM execution failed: {result.stderr}")
-
-        return result.stdout.strip()
-
-    except subprocess.TimeoutExpired:
-        raise Exception("LLM processing timed out")
+        # Extract the PDF text from the prompt
+        lines = prompt.split('\n')
+        pdf_text_lines = []
+        pdf_text_start = False
+        
+        for line in lines:
+            if "PDF TEXT TO ANALYZE:" in line:
+                pdf_text_start = True
+                continue
+            if pdf_text_start:
+                pdf_text_lines.append(line)
+        
+        pdf_text = '\n'.join(pdf_text_lines)
+        products = []
+        
+        print(f"🔍 Processing {len(pdf_text_lines)} lines of PDF text")
+        
+        # Look for product lines with pattern: 9-digit-number PRODUCT_NAME numbers...
+        for line in pdf_text_lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Match pattern: 9 digits, product name, then numbers
+            # Example: "101233933 GAR MJÖLK1,5L MEL1,5% ESL MJÖLK/MATLAGNING 442 22 24,8%"
+            match = re.match(r'^(\d{9})\s+([A-ZÅÄÖÜ\s\d/,.-]+?)\s+[A-ZÅÄÖÜ/]+\s+\d+\s+(\d+)', line)
+            
+            if not match:
+                # Try simpler pattern: 9 digits, product name, then any numbers
+                match = re.match(r'^(\d{9})\s+([A-ZÅÄÖÜ\s\d/,.-]+?)\s+.*?\s+(\d+)', line)
+            
+            if match:
+                artikelnummer = match.group(1)
+                namn = match.group(2).strip()
+                
+                # Find the quantity (antal_sald) - look for standalone numbers
+                numbers = re.findall(r'\b(\d+)\b', line[len(artikelnummer + namn):])
+                antal_sald = int(numbers[0]) if numbers else 0
+                
+                # Clean up product name - remove trailing category info
+                namn_parts = namn.split()
+                cleaned_namn = []
+                for part in namn_parts:
+                    # Stop if we hit a category-like word
+                    if part.isupper() and len(part) > 3 and '/' in part:
+                        break
+                    cleaned_namn.append(part)
+                
+                final_namn = ' '.join(cleaned_namn).strip()
+                
+                if final_namn and len(final_namn) > 3:
+                    products.append({
+                        "artikelnummer": artikelnummer,
+                        "namn": final_namn,
+                        "antal_sald": antal_sald
+                    })
+                    
+                    print(f"📦 Found: {artikelnummer} - {final_namn} - {antal_sald}")
+        
+        print(f"✅ Extracted {len(products)} products")
+        
+        # Return in expected JSON format
+        result = {
+            "date": (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "extracted_at": datetime.now().isoformat(),
+            "products": products[:100]  # Limit to first 100 products
+        }
+        
+        return json.dumps(result, ensure_ascii=False)
+        
     except Exception as e:
-        raise Exception(f"LLM execution error: {str(e)}")
+        raise Exception(f"Extraction error: {str(e)}")
 
 def parse_llm_output(llm_output: str) -> Dict[str, Any]:
     """Parse and validate LLM JSON output"""
