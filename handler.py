@@ -116,11 +116,20 @@ def run_llm_extraction(prompt: str) -> str:
         
         print(f"📊 Found {len(digit_lines)} lines starting with 9 digits")
         
+        # Show first few complete lines for debugging
+        print("📋 FIRST 5 COMPLETE LINES FOR ANALYSIS:")
+        for i, (line_num, line) in enumerate(digit_lines[:5]):
+            print(f"Line {line_num}: '{line}'")
+        
         # Try to extract from the digit lines
         for line_num, line in digit_lines:
             try:
+                print(f"🔍 PROCESSING LINE {line_num}: '{line}'")
+                
                 # Split the line into parts
                 parts = line.split()
+                print(f"🔍 PARTS: {parts[:10]}")  # Show first 10 parts
+                
                 if len(parts) >= 3:
                     artikelnummer = parts[0]
                     
@@ -128,36 +137,51 @@ def run_llm_extraction(prompt: str) -> str:
                     namn_parts = []
                     antal_sald = 0
                     
+                    # More flexible parsing approach
                     for i, part in enumerate(parts[1:], 1):
+                        print(f"🔍 Checking part {i}: '{part}' (has letters: {bool(re.search(r'[A-ZÅÄÖÜ]', part))})")
+                        
                         # If this part is a pure number and we have some name parts, might be quantity
                         if re.match(r'^\d+$', part) and len(namn_parts) > 0:
                             antal_sald = int(part)
+                            print(f"🎯 Found quantity: {antal_sald}")
                             break
                         # If it contains letters, it's likely part of the name
                         elif re.search(r'[A-ZÅÄÖÜ]', part):
                             namn_parts.append(part)
-                        # If it's a category separator (all caps with /)
-                        elif '/' in part and part.isupper():
-                            # This might be category, try to find quantity after
-                            remaining_parts = parts[i+1:]
-                            for remaining_part in remaining_parts:
-                                if re.match(r'^\d+$', remaining_part):
-                                    antal_sald = int(remaining_part)
-                                    break
+                            print(f"📝 Added to name: {part}")
+                        # If it's a decimal (like price), skip it
+                        elif ',' in part or '.' in part:
+                            print(f"💰 Skipping decimal: {part}")
+                            continue
+                        # If it's a percentage, we've gone too far
+                        elif '%' in part:
+                            print(f"📊 Hit percentage, stopping: {part}")
+                            break
+                        # If it's just numbers after we have a name, could be quantity
+                        elif re.match(r'^\d+$', part) and len(namn_parts) > 0 and antal_sald == 0:
+                            antal_sald = int(part)
+                            print(f"🎯 Found quantity (fallback): {antal_sald}")
                             break
                     
                     namn = ' '.join(namn_parts).strip()
                     
-                    if namn and len(namn) > 2 and artikelnummer:
+                    print(f"🧮 RESULT: artikelnummer='{artikelnummer}', namn='{namn}' (len={len(namn)}), antal_sald={antal_sald}")
+                    
+                    # More lenient validation
+                    if namn and len(namn) >= 2 and artikelnummer:
                         products.append({
                             "artikelnummer": artikelnummer,
                             "namn": namn,
                             "antal_sald": antal_sald
                         })
                         print(f"📦 EXTRACTED: {artikelnummer} | {namn} | {antal_sald}")
+                    else:
+                        print(f"❌ REJECTED: namn too short or empty")
             
             except Exception as line_error:
                 print(f"❌ Error processing line {line_num}: {line_error}")
+                print(f"❌ Line was: '{line}'")
                 continue
         
         print(f"✅ Final extraction: {len(products)} products")
