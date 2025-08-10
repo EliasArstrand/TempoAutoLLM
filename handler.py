@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any
 import fitz  # PyMuPDF
 import re
+import sys
+import traceback
 
 # Model settings - Not needed for regex approach but keeping for reference
 MODEL_PATH = "model/phi-3-mini.gguf"
@@ -99,12 +101,6 @@ def run_llm_extraction(prompt: str) -> str:
         products = []
         
         print(f"🔍 Processing {len(pdf_text_lines)} lines of PDF text")
-        
-        # DEBUG: Show first 20 lines to understand the format
-        print("📋 SAMPLE LINES FOR DEBUGGING:")
-        for i, line in enumerate(pdf_text_lines[:20]):
-            if line.strip():
-                print(f"Line {i}: '{line.strip()}'")
         
         # Look for lines that start with 9 digits
         digit_lines = []
@@ -210,19 +206,30 @@ def parse_llm_output(llm_output: str) -> Dict[str, Any]:
         raise ValueError(f"Output parsing error: {str(e)}")
 
 def handler(event):
-    """Main RunPod handler function"""
+    """Main RunPod handler function with proper response formatting"""
+    
+    # Ensure we always return a proper response
+    response = {
+        "success": False,
+        "error": None,
+        "products": [],
+        "debug_info": {}
+    }
+    
     try:
+        print(f"🚀 Handler started with event: {json.dumps(event, indent=2)[:500]}")
+        
         # Skip model download for regex approach
         download_model()
         
         # Get input data
         input_data = event.get("input", {})
+        print(f"📥 Input data keys: {list(input_data.keys())}")
         
         if "pdf_base64" not in input_data:
-            return {
-                "success": False,
-                "error": "Missing 'pdf_base64' in input data"
-            }
+            response["error"] = "Missing 'pdf_base64' in input data"
+            print(f"❌ {response['error']}")
+            return response
         
         # Decode PDF data
         try:
@@ -251,25 +258,22 @@ def handler(event):
                             pdf_data = base64.b64encode(buffer_bytes).decode('utf-8')
                             print(f"🔍 DEBUG: Converted Buffer to base64, length: {len(pdf_data)}")
                         else:
-                            return {
-                                "success": False,
-                                "error": f"Buffer object missing data array: {pdf_data}",
-                                "debug_buffer_keys": list(pdf_data.keys())
-                            }
+                            response["error"] = f"Buffer object missing data array: {pdf_data}"
+                            response["debug_info"]["buffer_keys"] = list(pdf_data.keys())
+                            print(f"❌ {response['error']}")
+                            return response
                     else:
-                        return {
-                            "success": False,
-                            "error": f"Could not find binary data in object with keys: {list(pdf_data.keys())}",
-                            "debug_full_object": str(pdf_data)[:500]
-                        }
+                        response["error"] = f"Could not find binary data in object with keys: {list(pdf_data.keys())}"
+                        response["debug_info"]["full_object"] = str(pdf_data)[:500]
+                        print(f"❌ {response['error']}")
+                        return response
             
             # Ensure we have a string for base64 decoding
             if not isinstance(pdf_data, str):
-                return {
-                    "success": False,
-                    "error": f"PDF data is still not string format after processing: {type(pdf_data)}",
-                    "debug_data_content": str(pdf_data)[:200]
-                }
+                response["error"] = f"PDF data is still not string format after processing: {type(pdf_data)}"
+                response["debug_info"]["data_content"] = str(pdf_data)[:200]
+                print(f"❌ {response['error']}")
+                return response
             
             print(f"🔍 DEBUG: Final pdf_data length: {len(pdf_data)}")
             
@@ -284,30 +288,31 @@ def handler(event):
             print(f"🔍 DEBUG: Decoded PDF bytes length: {len(pdf_bytes)}")
             
             if len(pdf_bytes) < 100:
-                return {
-                    "success": False,
-                    "error": f"PDF data too small ({len(pdf_bytes)} bytes) - likely corrupted",
-                    "debug_original_data_length": len(str(pdf_data)),
-                    "debug_data_sample": str(pdf_data)[:100]
+                response["error"] = f"PDF data too small ({len(pdf_bytes)} bytes) - likely corrupted"
+                response["debug_info"] = {
+                    "original_data_length": len(str(pdf_data)),
+                    "data_sample": str(pdf_data)[:100]
                 }
+                print(f"❌ {response['error']}")
+                return response
                 
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Invalid base64 PDF data: {str(e)}",
-                "debug_data_type": str(type(input_data.get("pdf_base64"))),
-                "debug_data_preview": str(input_data.get("pdf_base64"))[:200] if input_data.get("pdf_base64") else "None"
+            response["error"] = f"Invalid base64 PDF data: {str(e)}"
+            response["debug_info"] = {
+                "data_type": str(type(input_data.get("pdf_base64"))),
+                "data_preview": str(input_data.get("pdf_base64"))[:200] if input_data.get("pdf_base64") else "None"
             }
+            print(f"❌ {response['error']}")
+            return response
         
         # Extract text from PDF
         try:
             pdf_text = extract_text_from_pdf(pdf_bytes)
             print(f"📄 Extracted {len(pdf_text)} characters from PDF")
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            response["error"] = str(e)
+            print(f"❌ PDF extraction failed: {response['error']}")
+            return response
         
         # Create extraction prompt
         prompt = create_extraction_prompt(pdf_text)
@@ -317,39 +322,50 @@ def handler(event):
             extraction_output = run_llm_extraction(prompt)
             print(f"🤖 Extraction generated {len(extraction_output)} characters")
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "debug_info": {
-                    "pdf_text_length": len(pdf_text),
-                    "pdf_preview": pdf_text[:500]
-                }
+            response["error"] = str(e)
+            response["debug_info"] = {
+                "pdf_text_length": len(pdf_text),
+                "pdf_preview": pdf_text[:500]
             }
+            print(f"❌ Extraction failed: {response['error']}")
+            return response
         
         # Parse and validate output
         try:
             result_data = parse_llm_output(extraction_output)
-            result_data["success"] = True
-            result_data["errors"] = []
+            
+            # Update response with success data
+            response["success"] = True
+            response["error"] = None
+            response["products"] = result_data["products"]
+            response["date"] = result_data["date"]
+            response["extracted_at"] = result_data["extracted_at"]
+            response["stats"] = result_data["stats"]
             
             print(f"✅ Successfully extracted {len(result_data['products'])} products")
-            return result_data
+            print(f"📤 Returning response with success: {response['success']}")
+            
+            return response
             
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "debug_info": {
-                    "extraction_output_preview": extraction_output[:1000]
-                }
-            }
+            response["error"] = str(e)
+            response["debug_info"]["extraction_output_preview"] = extraction_output[:1000]
+            print(f"❌ Output parsing failed: {response['error']}")
+            return response
     
     except Exception as e:
-        return {
-            "success": False,
-            "error": f"Unexpected error: {str(e)}"
-        }
+        # Catch any unexpected errors
+        response["error"] = f"Unexpected error: {str(e)}"
+        response["debug_info"]["traceback"] = traceback.format_exc()
+        print(f"❌ Unexpected error: {response['error']}")
+        print(f"🔥 Traceback: {response['debug_info']['traceback']}")
+        return response
 
 # Start the serverless worker
 if __name__ == "__main__":
-    runpod.serverless.start({"handler": handler})
+    print("🎬 Starting RunPod serverless worker...")
+    try:
+        runpod.serverless.start({"handler": handler})
+    except Exception as e:
+        print(f"❌ Failed to start RunPod worker: {str(e)}")
+        sys.exit(1)
